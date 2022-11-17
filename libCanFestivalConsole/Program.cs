@@ -7,7 +7,7 @@ using libCanFestivalConsole.Sdk;
 Console.WriteLine("Can port init...");
 try
 {
-    var initProcess = new ProcessStartInfo("./Lib/can_init.sh");
+    var initProcess = new ProcessStartInfo("./Lib/can_init.sh", "can0");
     var process = Process.Start(initProcess);
 
     process?.WaitForExit();
@@ -30,7 +30,7 @@ try
 {
     var canOpen = new CanOpen();
 
-    canOpen.ConnectionEventHandler += (sender, args) =>
+    canOpen.ConnectionEventHandler += (_, args) =>
     {
         Console.WriteLine($"CANFestival ConnectionEventHandler is happening! Result: {args.Connected} ");
     };
@@ -70,9 +70,10 @@ try
     
     Console.WriteLine("Sending SDO nodeId = 02, OD=1802-02, change report model in 5 seconds");
     Thread.Sleep(5000);
-    canOpen.SDOWrite(0x02, 0x1800, 0x02, (byte)0xFE, protocol =>
+    canOpen.SDOWrite(0x02, 0x1800, 0x02, (byte)0xFE, p =>
     {
-        
+        if(p.SDOState == SDOState.SDO_ERROR)
+            Console.Write($"SDOWrite Failed! Return buffer: {BitConverter.ToString(p.DataBuffer)}");
     });
 
     Console.WriteLine("Press any key to exit test...");
@@ -87,6 +88,11 @@ try
         canOpen.WritePDO(0x0202, new byte[] { 0x00 });
     }
     
+    canOpen.SDOWrite(0x02, 0x1800, 0x02, (byte)0xFF, p =>
+    {
+        if(p.SDOState == SDOState.SDO_ERROR)
+            Console.Write($"SDOWrite Failed! Return buffer: {BitConverter.ToString(p.DataBuffer)}");
+    });
     canOpen.Close();
 }
 catch (Exception ex)

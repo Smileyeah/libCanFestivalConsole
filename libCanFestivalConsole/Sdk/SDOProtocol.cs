@@ -40,7 +40,11 @@ public class SDOProtocol
     //FIX me i was using all these from outside this class
     //should see if that is really needed or if better accessors are required
     //may be readonly access etc.
-    public byte[] DataBuffer = null;
+    public byte[] DataBuffer
+    {
+        get;
+        private set;
+    }
     
     public SDOState SDOState
     {
@@ -332,128 +336,117 @@ public class SDOProtocol
 
         var c = 0x01 & canPacket.Data[0]; //More segments to upload?
 
-        // ERROR abort
-        if (SCS == 0x04)
+        switch (SCS)
         {
-            ExpeditedData = (uint)(canPacket.Data[4] + (canPacket.Data[5] << 8) + (canPacket.Data[6] << 16) + (canPacket.Data[7] << 24));
-            DataBuffer = BitConverter.GetBytes(ExpeditedData);
-
-            SDOState = SDOState.SDO_ERROR;
-
-            Console.WriteLine("SDO Error on {0:x4}/{1:x2} {2:x8}", this.Index, this.SubIndex, ExpeditedData);
-
-            _completedAction?.Invoke(this);
-
-            return true;
-        }
-
-        // Write complete
-        if (SCS == 0x03)
-        {
-            var index = (ushort)(canPacket.Data[1] + (canPacket.Data[2] << 8));
-            var sub = canPacket.Data[3];
-
-            var node = canPacket.Cob - 0x580;
-            lock (ActiveSDO)
+            // ERROR abort
+            case 0x04:
             {
-                foreach (var sdo in ActiveSDO)
+                ExpeditedData = (uint)(canPacket.Data[4] + (canPacket.Data[5] << 8) + (canPacket.Data[6] << 16) + (canPacket.Data[7] << 24));
+                DataBuffer = BitConverter.GetBytes(ExpeditedData);
+
+                SDOState = SDOState.SDO_ERROR;
+
+                Console.WriteLine("SDO Error on {0:x4}/{1:x2} {2:x8}", this.Index, this.SubIndex, ExpeditedData);
+
+                _completedAction?.Invoke(this);
+
+                return true;
+            }
+            // Write complete
+            case 0x03:
+            {
+                var index = (ushort)(canPacket.Data[1] + (canPacket.Data[2] << 8));
+                var sub = canPacket.Data[3];
+
+                var node = canPacket.Cob - 0x580;
+                lock (ActiveSDO)
                 {
-                    if (sdo.node != node) 
-                        continue;
+                    foreach (var sdo in ActiveSDO)
+                    {
+                        if (sdo.node != node) 
+                            continue;
                 
-                    if (index != sdo.Index || sub != sdo.SubIndex) 
-                        continue; //if segments break its here
+                        if (index != sdo.Index || sub != sdo.SubIndex) 
+                            continue; //if segments break its here
                 
-                    if (Expedited)
-                        continue;
+                        if (Expedited)
+                            continue;
                 
-                    SDOState = SDOState.SDO_HANDSHAKE;
-                    RequestNextSegment(false);
-                
-                    return false;
+                        SDOState = SDOState.SDO_HANDSHAKE;
+                        RequestNextSegment(false);
+                        return false;
+                    }
                 }
-            }
 
-            SDOState = SDOState.SDO_FINISHED;
-
-            _completedAction?.Invoke(this);
-
-            return true;
-        }
-
-        // Write segment complete
-        if (SCS == 0x01)
-        {
-            if (_totalData < ExpeditedData)
-            {
-                _lastToggle = !_lastToggle;
-                RequestNextSegment(_lastToggle);
-            }
-            else
-            {
                 SDOState = SDOState.SDO_FINISHED;
                 _completedAction?.Invoke(this);
+                return true;
             }
-
-        }
-
-        //if expedited just handle the data
-        if (SCS == 0x02 && e == 1)
-        {
-            //Expedited and length are set so its a regular short transfer
-            ExpeditedData = (uint)(canPacket.Data[4] + (canPacket.Data[5] << 8) + (canPacket.Data[6] << 16) + (canPacket.Data[7] << 24));
-            DataBuffer = BitConverter.GetBytes(ExpeditedData);
-
-            SDOState = SDOState.SDO_FINISHED;
-
             
-            _completedAction?.Invoke(this);
-
-            return true;
-        }
-
-        if (SCS == 0x02)
-        {
-            var count = (uint)(canPacket.Data[4] + (canPacket.Data[5] << 8) + (canPacket.Data[6] << 16) + (canPacket.Data[7] << 24));
-
-            Console.WriteLine("RX Segmented transfer start length is {0}", count);
-            ExpeditedData = count;
-            DataBuffer = new byte[ExpeditedData];
-            _totalData = 0;
-            //Request next segment
-
-            RequestNextSegment(false); //toggle off on first request
-            return false;
-
-        }
-
-        // segmented transfer
-        var segCount = (uint)(7 - sn);
-
-        //Segments toggle on
-        if (SCS == 0x00)
-        {
-            Console.WriteLine("RX Segmented transfer update length is {0} -- {1}", segCount, _totalData);
-
-            for (var x = 0; x < segCount; x++)
-            {
-                if (_totalData + x < DataBuffer.Length)
-                    DataBuffer[_totalData + x] = canPacket.Data[1 + x];
-            }
-
-            _totalData += 7;
-
-            if (_totalData < ExpeditedData && c == 0)
+            // Write segment complete
+            case 0x01 when _totalData < ExpeditedData:
             {
                 _lastToggle = !_lastToggle;
                 RequestNextSegment(_lastToggle);
+                break;
             }
-            else
+            
+            case 0x01:
             {
                 SDOState = SDOState.SDO_FINISHED;
                 _completedAction?.Invoke(this);
+                break;
             }
+            
+            //if expedited just handle the data
+            case 0x02 when e == 1:
+                //Expedited and length are set so its a regular short transfer
+                ExpeditedData = (uint)(canPacket.Data[4] + (canPacket.Data[5] << 8) + (canPacket.Data[6] << 16) + (canPacket.Data[7] << 24));
+                DataBuffer = BitConverter.GetBytes(ExpeditedData);
 
+                SDOState = SDOState.SDO_FINISHED;
+                _completedAction?.Invoke(this);
+
+                return true;
+            case 0x02:
+            {
+                var count = (uint)(canPacket.Data[4] + (canPacket.Data[5] << 8) + (canPacket.Data[6] << 16) + (canPacket.Data[7] << 24));
+
+                Console.WriteLine("RX Segmented transfer start length is {0}", count);
+                ExpeditedData = count;
+                DataBuffer = new byte[ExpeditedData];
+                _totalData = 0;
+                //Request next segment
+
+                RequestNextSegment(false); //toggle off on first request
+                return false;
+            }
+            case 0x00:
+            {
+                // segmented transfer
+                var segCount = (uint)(7 - sn);
+                Console.WriteLine("RX Segmented transfer update length is {0} -- {1}", segCount, _totalData);
+
+                for (var x = 0; x < segCount; x++)
+                {
+                    if (_totalData + x < DataBuffer.Length)
+                        DataBuffer[_totalData + x] = canPacket.Data[1 + x];
+                }
+
+                _totalData += 7;
+                if (_totalData < ExpeditedData && c == 0)
+                {
+                    _lastToggle = !_lastToggle;
+                    RequestNextSegment(_lastToggle);
+                }
+                else
+                {
+                    SDOState = SDOState.SDO_FINISHED;
+                    _completedAction?.Invoke(this);
+                }
+                
+                break;
+            }
         }
 
         return false;
